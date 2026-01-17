@@ -1,0 +1,231 @@
+---
+title: "Juniper Hybrid Zone: H2O Random Forest for Ancestry Prediction"
+author: "Kathryn Uckele"
+date: "2022-04-11"
+output:
+  pdf_document:
+    toc: true
+---
+  
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+
+# Create an outputs folder if it doesn't exist
+library(here)
+dir.create(here::here("outputs"), showWarnings = FALSE)
+```
+
+# Overview
+This analysis predicts hybrid ancestry (q) from environmental and geographic predictors using a Random Forest model in H2O (DRF).
+We include: data compilation, EDA, train/test split, hyperparameter tuning (random grid), model evaluation, and interpretability (variable importance + residuals).
+
+# Libraries
+```{r libraries}
+library(rsample) # train/test split
+library(rhdf5) # read HDF5
+library(h2o) # modeling
+library(dplyr) # data wrangling
+library(ggplot2) # plotting
+```
+
+# Data Loading
+## Load IDs
+```{r ids}
+ids_path <- here::here("data", "juniper_correct_ids.txt")
+ids <- read.table(ids_path, stringsAsFactors = FALSE)[, 1]
+
+group <- substr(ids, 4, 5)
+pop <- substr(ids, 1, 2)
+
+indexHY <- which(group == "HY") # include hybrids
+indexZA <- which(pop != "ZA") # exclude ZA hybrids
+index <- intersect(indexHY, indexZA)
+length(index)
+```
+
+## Load ancestry (q)
+```{r load data}
+h5_path <- here::here("data", "entropy_k2_trial1_rep0.hdf5")
+## IS Q MODELED IN THIS CODE?
+Q <- h5read(h5_path, "Q")
+q <- h5read(h5_path, "q")
+## IS Q MODELED IN THIS CODE?
+Q.mean <- apply(Q[, 2, ], 2, mean)
+
+# substract ancestry from 1 so that pure western ancestry == 0
+q.mean <- 1 - apply(q[,1,], 2, mean) 
+
+# subset ancestry to only hybrids
+## IS Q MODELED IN THIS CODE?
+Q_hyb <- Q.mean[index]
+q_hyb <- q.mean[index]
+
+summary(q_hyb)
+```
+
+## Load environmental variables
+```{r load env}
+env_path <- here::here("data", "clim_for_RDA_11.9.21.csv")
+env <- read.csv(env_path, row.names = 1)
+env_hyb <- env[index, , drop = FALSE]
+```
+
+## Load geographic variables
+```{r load geo}
+geo_path <- here::here("data", "Clim.txt")
+latlong <- read.table(geo_path)[, 1:2]
+colnames(latlong) <- c("lat", "long")
+latlong_hyb <- latlong[index, , drop = FALSE]
+```
+
+## Compile modeling dataset
+```{r compile}
+## IS Q MODELED IN THIS CODE?
+
+HybridQ <- data.frame(Q=Q_hyb, env_hyb, latlong_hyb)
+
+Hybridq <- data.frame(
+q = q_hyb,
+env_hyb,
+latlong_hyb
+)
+```
+
+# EDA
+```{r eda}
+## Target distribution 
+ggplot(Hybridq, aes(x = q)) +
+geom_histogram(bins = 30) +
+labs(title = "Distribution of q (target)", x = "q", y = "Count")
+
+## Quick missingness check (after drop_na this should be 0)
+sum(is.na(Hybridq))
+
+## Correlation snapshot for numeric predictors
+num_df <- Hybridq %>% select(where(is.numeric))
+cor_mat <- cor(num_df, use = "pairwise.complete.obs")
+cor_mat[1(8, ncol(cor_mat)), 1(8, ncol(cor_mat))]
+
+#INCLUDE OR NOT?
+## Drop rows with missing values
+Hybridq <- Hybridq %>% tidyr::drop_na()
+dim(Hybridq)
+```
+
+# Modeling with H2O (DRF)
+## Initialize H2O + split data
+```{r H2O}
+h2o.init()
+
+set.seed(123)
+
+split <- initial_split(Hybridq, prop = 0.80)
+train_df <- training(split)
+test_df <- testing(split)
+
+train.h2o <- as.h2o(train_df)
+test.h2o <- as.h2o(test_df)
+
+y <- "q"
+x <- setdiff(names(train_df), y)
+```
+
+## Hyperparameter grid search (random)
+```{r hyperparamters}
+hyper_grid <- list(
+  mtries = seq(2, min(length(x), 32), by = 2),
+  min_rows = seq(1, 25, by = 2),
+  nbins = seq(10, 50, by = 5),
+  sample_rate = c(0.55, 0.632, 0.7, 0.8),
+  ntrees = c(100, 200, 400)
+)
+
+search_criteria <- list(
+  strategy = "RandomDiscrete",
+  stopping_metric = "mse",
+  stopping_tolerance = 0.005,
+  stopping_rounds = 10,
+  max_runtime_secs = 30 * 60
+)
+
+grid_id <- "drf_grid_q"
+
+grid <- h2o.grid(
+  algorithm = "drf",
+  grid_id = grid_id,
+  x = x,
+  y = y,
+  training_frame = train.h2o,
+  hyper_params = hyper_grid,
+  search_criteria = search_criteria,
+  nfolds = 5,
+  fold_assignment = "Modulo",
+  keep_cross_validation_predictions = TRUE,
+  seed = 123
+)
+
+grid_perf <- h2o.getGrid(grid_id, sort_by = "mse", decreasing = FALSE)
+grid_perf
+```
+
+## Best model + evaluation
+```{r best model}
+best_model_id <- grid_perf@model_ids[[1]]
+best_model <- h2o.getModel(best_model_id)
+
+## CV metrics
+cv_perf <- h2o.performance(best_model, xval = TRUE)
+cv_rmse <- sqrt(h2o.mse(cv_perf))
+cv_r2 <- h2o.r2(cv_perf)
+cv_mae <- h2o.mae(cv_perf)
+
+cv_rmse; cv_r2; cv_mae
+
+## Test metrics
+test_perf <- h2o.performance(best_model, newdata = test.h2o)
+test_rmse <- sqrt(h2o.mse(test_perf))
+test_r2 <- h2o.r2(test_perf)
+test_mae <- h2o.mae(test_perf)
+
+test_rmse; test_r2; test_mae
+```
+
+## Variable importance plot (top 20)
+``` {r variable importance}
+varimp_df <- as.data.frame(h2o.varimp(best_model))
+varimp_top <- varimp_df %>% slice_head(n = 20)
+
+p_varimp <- ggplot(varimp_top, 
+                   aes(x = reorder(variable, relative_importance), 
+                       y = relative_importance)) +
+  geom_col() +
+  coord_flip() +
+  labs(title = "Top 20 Variable Importance (H2O DRF)",
+       x = NULL, y = "Relative importance")
+
+p_varimp
+
+ggsave(filename = here::here("outputs", "variable_importance_plot.pdf"),
+       plot = p_varimp, width = 8, height = 6)
+```
+
+## Residual distribution (test set)
+```{r residuals}
+pred_h2o <- h2o.predict(best_model, test.h2o)
+pred <- as.vector(pred_h2o)
+actual <- test_df$q
+residuals <- actual - pred
+
+p_resid <- ggplot(data.frame(residuals = residuals), aes(x = residuals)) +
+  geom_histogram(bins = 30) +
+  labs(title = "Residual Distribution (Test Set)", x = "Residual", y = "Count")
+
+p_resid
+ggsave(filename = here::here("outputs", "residuals_hist.pdf"),
+       plot = p_resid, width = 8, height = 5)
+```
+
+# Wrap up
+```{r wrap up}
+h2o.shutdown(prompt = FALSE)
+```

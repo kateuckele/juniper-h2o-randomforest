@@ -1,3 +1,16 @@
+# Large generated outputs 
+outputs/
+
+# ---- Rendered outputs ----
+*.pdf
+*.html
+*.docx
+*.pptx
+*.log
+*.aux
+*.out
+*.toc
+
 # History files
 .Rhistory
 .Rapp.history
