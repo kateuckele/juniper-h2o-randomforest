@@ -16,7 +16,7 @@ This repo contains a reproducible RMarkdown workflow covering data compilation, 
 ├── juniper_h2o_rf.Rmd
 ├── README.md
 ├── data/ # input data files
-└── outputs/ # generated figures/CSVs (gitignored)
+└── outputs/ # generated figures/CSVs (PDFs gitignored)
 ```
 
 ## Requirements
