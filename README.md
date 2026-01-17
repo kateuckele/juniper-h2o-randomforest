@@ -11,11 +11,13 @@ This repo contains a reproducible RMarkdown workflow covering data compilation, 
 - Reproducible outputs saved to `outputs/`
 
 ## Repository Structure
+```
 .
 ├── juniper_h2o_rf.Rmd
 ├── README.md
 ├── data/ # input data files
 └── outputs/ # generated figures/CSVs (gitignored)
+```
 
 ## Requirements
 - R (>= 4.1 recommended)
