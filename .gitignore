@@ -1,7 +1,4 @@
-# Large generated outputs 
-outputs/
-
-# ---- Rendered outputs ----
+# Large Rendered outputs
 *.pdf
 *.html
 *.docx
