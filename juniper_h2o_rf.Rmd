@@ -46,18 +46,12 @@ length(index)
 ## Load ancestry (q)
 ```{r load data}
 h5_path <- here::here("data", "entropy_k2_trial1_rep0.hdf5")
-## IS Q MODELED IN THIS CODE?
-Q <- h5read(h5_path, "Q")
 q <- h5read(h5_path, "q")
-## IS Q MODELED IN THIS CODE?
-Q.mean <- apply(Q[, 2, ], 2, mean)
 
-# substract ancestry from 1 so that pure western ancestry == 0
+# subtract ancestry from 1 so that pure western ancestry == 0
 q.mean <- 1 - apply(q[,1,], 2, mean) 
 
 # subset ancestry to only hybrids
-## IS Q MODELED IN THIS CODE?
-Q_hyb <- Q.mean[index]
 q_hyb <- q.mean[index]
 
 summary(q_hyb)
@@ -80,14 +74,10 @@ latlong_hyb <- latlong[index, , drop = FALSE]
 
 ## Compile modeling dataset
 ```{r compile}
-## IS Q MODELED IN THIS CODE?
-
-HybridQ <- data.frame(Q=Q_hyb, env_hyb, latlong_hyb)
-
 Hybridq <- data.frame(
-q = q_hyb,
-env_hyb,
-latlong_hyb
+  q = q_hyb,
+  env_hyb,
+  latlong_hyb
 )
 ```
 
@@ -95,27 +85,23 @@ latlong_hyb
 ```{r eda}
 ## Target distribution 
 ggplot(Hybridq, aes(x = q)) +
-geom_histogram(bins = 30) +
-labs(title = "Distribution of q (target)", x = "q", y = "Count")
+  geom_histogram(bins = 30) +
+  labs(title = "Distribution of q (target)", x = "q", y = "Count")
 
-## Quick missingness check (after drop_na this should be 0)
+## Quick missingness check
 sum(is.na(Hybridq))
 
 ## Correlation snapshot for numeric predictors
 num_df <- Hybridq %>% select(where(is.numeric))
 cor_mat <- cor(num_df, use = "pairwise.complete.obs")
-cor_mat[1(8, ncol(cor_mat)), 1(8, ncol(cor_mat))]
-
-#INCLUDE OR NOT?
-## Drop rows with missing values
-Hybridq <- Hybridq %>% tidyr::drop_na()
-dim(Hybridq)
+cor_mat[1:min(8, ncol(cor_mat)), 1:min(8, ncol(cor_mat))]
 ```
 
 # Modeling with H2O (DRF)
 ## Initialize H2O + split data
 ```{r H2O}
 h2o.init()
+h2o.removeAll()
 
 set.seed(123)
 
@@ -142,11 +128,11 @@ hyper_grid <- list(
 
 search_criteria <- list(
   strategy = "RandomDiscrete",
+  max_models = 20,
   stopping_metric = "mse",
   stopping_tolerance = 0.005,
   stopping_rounds = 10,
-  max_runtime_secs = 30 * 60
-)
+  max_runtime_secs = 5 * 60)
 
 grid_id <- "drf_grid_q"
 
@@ -173,6 +159,8 @@ grid_perf
 best_model_id <- grid_perf@model_ids[[1]]
 best_model <- h2o.getModel(best_model_id)
 
+h2o.saveModel(best_model, path = here::here("outputs"), force = TRUE)
+
 ## CV metrics
 cv_perf <- h2o.performance(best_model, xval = TRUE)
 cv_rmse <- sqrt(h2o.mse(cv_perf))
@@ -188,11 +176,23 @@ test_r2 <- h2o.r2(test_perf)
 test_mae <- h2o.mae(test_perf)
 
 test_rmse; test_r2; test_mae
+
+metrics <- data.frame(
+  cv_rmse = cv_rmse, cv_r2 = cv_r2, cv_mae = cv_mae,
+  test_rmse = test_rmse, test_r2 = test_r2, test_mae = test_mae
+)
+
+write.csv(metrics, here::here("outputs", "metrics.csv"), row.names = FALSE)
 ```
 
 ## Variable importance plot (top 20)
 ``` {r variable importance}
 varimp_df <- as.data.frame(h2o.varimp(best_model))
+
+write.csv(varimp_df,
+          here::here("outputs", "varimp.csv"),
+          row.names = FALSE)
+
 varimp_top <- varimp_df %>% slice_head(n = 20)
 
 p_varimp <- ggplot(varimp_top, 
